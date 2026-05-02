@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: incognito-guard-server
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_PASS
+        sync: false
+      - key: NOTIFY_EMAIL
+        sync: false
+      - key: DASHBOARD_PASS
+        sync: false
+      - key: LS_WEBHOOK_SECRET
+        sync: false

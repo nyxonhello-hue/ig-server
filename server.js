@@ -8,28 +8,33 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const GMAIL_USER       = process.env.GMAIL_USER       || '';
-const GMAIL_PASS       = process.env.GMAIL_PASS       || '';
-const NOTIFY_EMAIL     = process.env.NOTIFY_EMAIL     || '';
-const DASHBOARD_PASS   = process.env.DASHBOARD_PASS   || 'ig2024';
+const GMAIL_USER        = process.env.GMAIL_USER        || '';
+const GMAIL_PASS        = process.env.GMAIL_PASS        || '';
+const NOTIFY_EMAIL      = process.env.NOTIFY_EMAIL      || '';
+const DASHBOARD_PASS    = process.env.DASHBOARD_PASS    || 'ig2024';
 const LS_WEBHOOK_SECRET = process.env.LS_WEBHOOK_SECRET || '';
+
+// Pro download links (update these when you publish new releases)
+const PRO_DOWNLOADS = {
+  windows: 'https://incognito-guard.vercel.app/ig-pro-download.html',
+  linux:   'https://incognito-guard.vercel.app/ig-pro-download.html',
+  macos:   'https://incognito-guard.vercel.app/ig-pro-download.html',
+};
 
 // ── Data files ────────────────────────────────────────────────────────────────
 const DATA_DIR      = path.join(__dirname, 'data');
 const CONTACTS_FILE = path.join(DATA_DIR, 'contacts.json');
-const KEYS_FILE     = path.join(DATA_DIR, 'licenses.json');
+const ORDERS_FILE   = path.join(DATA_DIR, 'orders.json');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(CONTACTS_FILE)) fs.writeFileSync(CONTACTS_FILE, '[]');
-if (!fs.existsSync(KEYS_FILE))     fs.writeFileSync(KEYS_FILE,     '[]');
+if (!fs.existsSync(ORDERS_FILE))   fs.writeFileSync(ORDERS_FILE,   '[]');
 
 // ── Middleware ────────────────────────────────────────────────────────────────
-// Raw body needed for webhook signature verification
 app.use('/api/lemonsqueezy/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS — allow your Vercel site
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -47,9 +52,7 @@ const transporter = nodemailer.createTransport({
 function sendEmail(to, subject, html) {
   return transporter.sendMail({
     from: `"Incognito Guard" <${GMAIL_USER}>`,
-    to,
-    subject,
-    html
+    to, subject, html
   });
 }
 
@@ -66,22 +69,15 @@ function saveContacts(data) {
   fs.writeFileSync(CONTACTS_FILE, JSON.stringify(data, null, 2));
 }
 
-function loadKeys() {
-  try { return JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8')); }
+function loadOrders() {
+  try { return JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8')); }
   catch (_) { return []; }
 }
-function saveKeys(data) {
-  fs.writeFileSync(KEYS_FILE, JSON.stringify(data, null, 2));
+function saveOrders(data) {
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(data, null, 2));
 }
 
-function generateKey() {
-  const seg = () => crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `IG-${seg()}-${seg()}-${seg()}`;
-}
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-
-// Health check
+// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({ status: 'Incognito Guard Server running', time: new Date().toISOString() });
 });
@@ -95,7 +91,7 @@ app.post('/api/contact', async (req, res) => {
     }
 
     const entry = {
-      id:         crypto.randomUUID(),
+      id: crypto.randomUUID(),
       name, email, subject, os, message,
       receivedAt: new Date().toISOString()
     };
@@ -104,7 +100,6 @@ app.post('/api/contact', async (req, res) => {
     contacts.unshift(entry);
     saveContacts(contacts);
 
-    // Notify owner
     await notifyOwner(
       `🛡 IG Contact — ${subject} from ${name}`,
       `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
@@ -147,7 +142,6 @@ app.post('/api/lemonsqueezy/webhook', async (req, res) => {
 
     const payload = JSON.parse(req.body);
     const event   = payload.meta?.event_name;
-
     console.log('LS webhook event:', event);
 
     if (event !== 'order_created') return res.json({ received: true });
@@ -158,57 +152,63 @@ app.post('/api/lemonsqueezy/webhook', async (req, res) => {
 
     if (!email) return res.status(400).json({ error: 'No email in payload' });
 
-    // Prevent duplicate keys
-    const keys     = loadKeys();
-    const existing = keys.find(k => k.orderId === orderId);
+    // Prevent duplicate emails
+    const orders   = loadOrders();
+    const existing = orders.find(o => o.orderId === orderId);
     if (existing) {
-      console.log('Key already issued for order', orderId);
-      return res.json({ received: true, note: 'Key already issued' });
+      console.log('Order already processed:', orderId);
+      return res.json({ received: true, note: 'Already processed' });
     }
 
-    // Generate key
-    const key   = generateKey();
-    const entry = {
-      key,
-      email,
+    // Save order
+    orders.push({
       orderId,
-      createdAt:   new Date().toISOString(),
-      activatedAt: null,
-      machine:     null,
-      revoked:     false,
-      source:      'lemonsqueezy'
-    };
-    keys.push(entry);
-    saveKeys(keys);
+      email,
+      processedAt: new Date().toISOString()
+    });
+    saveOrders(orders);
 
-    // Email key to customer
+    // Email Pro download links to customer
     await sendEmail(
       email,
-      '🛡 Your Incognito Guard Pro License Key',
+      '🛡 Your Incognito Guard Pro Download',
       `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <div style="background:#0a0a0b;padding:24px;border-radius:12px 12px 0 0;">
-          <h2 style="color:#ff3e5e;margin:0;">Your Incognito Guard Pro License</h2>
+          <h2 style="color:#ff3e5e;margin:0;">🛡 Incognito Guard Pro</h2>
+          <p style="color:#ffcdd2;margin:4px 0 0;">Thank you for your purchase!</p>
         </div>
         <div style="background:#f9f9f9;padding:32px;border-radius:0 0 12px 12px;">
-          <p style="margin-bottom:16px;">Thank you for purchasing Incognito Guard Pro! 🎉</p>
-          <p>Your license key:</p>
-          <div style="background:#0a0a0b;color:#ff3e5e;font-family:monospace;
-            font-size:22px;padding:20px;border-radius:8px;margin:16px 0;
-            letter-spacing:0.15em;text-align:center;">
-            ${key}
+          <p style="margin-bottom:20px;font-size:15px;">
+            Your Pro download is ready. Choose your operating system:
+          </p>
+
+          <div style="text-align:center;margin-bottom:24px;">
+            <a href="https://incognito-guard.vercel.app/ig-pro-download.html"
+               style="display:inline-block;background:#ff3e5e;color:#fff;
+               font-family:monospace;font-size:16px;font-weight:bold;
+               padding:16px 40px;border-radius:8px;text-decoration:none;">
+              ⬇ Download Incognito Guard Pro
+            </a>
+            <p style="margin-top:8px;font-size:12px;color:#999;">
+              Windows · Linux · macOS — all included
+            </p>
           </div>
-          <p style="font-weight:bold;margin-bottom:8px;">How to activate:</p>
-          <ol style="margin:8px 0 16px 20px;line-height:2.2;">
-            <li>Download Incognito Guard from your receipt page</li>
-            <li>Open the app and click <strong>⚙ Settings</strong></li>
-            <li>Enter your license key above</li>
-            <li>Click <strong>Activate Pro</strong> — email alerts are now active!</li>
-          </ol>
-          <hr style="border:none;border-top:1px solid #eee;margin:20px 0;"/>
+
+          <div style="background:#fff8f8;border:1px solid #ffcdd2;border-radius:8px;padding:16px;margin-bottom:20px;">
+            <p style="margin:0;font-size:13px;color:#555;">
+              <strong>Quick setup:</strong><br/>
+              1. Extract the zip to your Desktop<br/>
+              2. Fill in your email in <code>config.json</code><br/>
+              3. Run <code>install.ps1</code> (Windows) or <code>install.sh</code> (Linux/macOS) as Admin<br/>
+              4. Open IncognitoGuard — email alerts are ready!
+            </p>
+          </div>
+
           <p style="color:#999;font-size:12px;">
             Order ID: ${orderId}<br/>
-            Need help? Reply to this email or visit
+            Need help? Visit
             <a href="https://incognito-guard.vercel.app/ig-contact.html">incognito-guard.vercel.app</a>
+            or reply to this email.
           </p>
           <p style="color:#ccc;font-size:11px;margin-top:16px;">
             Built for parents who care. — Incognito Guard
@@ -217,52 +217,29 @@ app.post('/api/lemonsqueezy/webhook', async (req, res) => {
       </div>`
     );
 
-    // Notify owner of sale
+    // Notify owner
     await notifyOwner(
       `💰 New Incognito Guard Sale — $19.99 from ${email}`,
-      `<div style="font-family:sans-serif;max-width:600px;">
-        <div style="background:#0a0a0b;padding:24px;border-radius:12px 12px 0 0;">
+      `<div style="font-family:sans-serif;max-width:500px;">
+        <div style="background:#0a0a0b;padding:20px;border-radius:12px 12px 0 0;">
           <h2 style="color:#ff3e5e;margin:0;">New Sale! 🎉</h2>
         </div>
-        <div style="background:#f9f9f9;padding:24px;border-radius:0 0 12px 12px;">
+        <div style="background:#f9f9f9;padding:20px;border-radius:0 0 12px 12px;">
           <p><strong>Customer:</strong> ${email}</p>
-          <p><strong>Key issued:</strong> ${key}</p>
           <p><strong>Order ID:</strong> ${orderId}</p>
           <p><strong>Date:</strong> ${new Date().toISOString()}</p>
+          <p><strong>Download links sent ✓</strong></p>
         </div>
       </div>`
     );
 
-    console.log(`Key ${key} issued to ${email}`);
+    console.log(`Pro download links sent to ${email}`);
     res.json({ success: true });
 
   } catch (err) {
     console.error('LS webhook error:', err.message);
     res.status(500).json({ error: err.message });
   }
-});
-
-// ── POST /api/activate — validate license key from guard.py ──────────────────
-app.post('/api/activate', (req, res) => {
-  const { key, machine } = req.body;
-  if (!key) return res.status(400).json({ success: false, error: 'No key provided.' });
-
-  const keys  = loadKeys();
-  const entry = keys.find(k => k.key === key.trim().toUpperCase());
-
-  if (!entry)        return res.json({ success: false, error: 'Invalid license key.' });
-  if (entry.revoked) return res.json({ success: false, error: 'This license has been revoked.' });
-  if (entry.activatedAt && entry.machine && entry.machine !== machine) {
-    return res.json({ success: false, error: 'Key already activated on another machine. Contact support.' });
-  }
-
-  if (!entry.activatedAt) {
-    entry.activatedAt = new Date().toISOString();
-    entry.machine     = machine || 'unknown';
-    saveKeys(keys);
-  }
-
-  res.json({ success: true, tier: 'pro', activatedAt: entry.activatedAt });
 });
 
 // ── GET /dashboard ────────────────────────────────────────────────────────────
@@ -277,7 +254,6 @@ app.get('/dashboard', (req, res) => {
           style="background:#16161a;padding:32px;border-radius:12px;
           border:1px solid #252529;display:flex;flex-direction:column;gap:12px;min-width:300px;">
           <h2 style="color:#e8e8f0;margin:0;">🛡 IG Dashboard</h2>
-          <p style="color:#5a5a6e;font-size:13px;margin:0;">Enter your dashboard password</p>
           <input name="pass" type="password" placeholder="Password"
             style="padding:10px;border-radius:8px;border:1px solid #3a3a42;
             background:#0a0a0b;color:#e8e8f0;font-size:14px;outline:none;"/>
@@ -292,24 +268,14 @@ app.get('/dashboard', (req, res) => {
   }
 
   const contacts = loadContacts();
-  const keys     = loadKeys();
-  const activated = keys.filter(k => k.activatedAt).length;
-  const pending   = keys.filter(k => !k.activatedAt && !k.revoked).length;
-  const revenue   = keys.filter(k => k.source === 'lemonsqueezy').length * 19.99;
+  const orders   = loadOrders();
 
-  const keyRows = keys.slice().reverse().map(k => `
+  const orderRows = orders.slice().reverse().map(o => `
     <tr style="border-bottom:1px solid #252529;">
-      <td style="padding:10px;font-family:monospace;font-size:11px;color:#ff3e5e;">${k.key}</td>
-      <td style="padding:10px;font-size:12px;color:#5a5a6e;">${k.email || '—'}</td>
-      <td style="padding:10px;">
-        <span style="padding:2px 8px;border-radius:4px;font-size:11px;
-          background:${k.revoked ? 'rgba(255,68,102,0.1)' : k.activatedAt ? 'rgba(0,229,160,0.1)' : 'rgba(255,255,255,0.05)'};
-          color:${k.revoked ? '#ff4466' : k.activatedAt ? '#00e5a0' : '#5a5a6e'};">
-          ${k.revoked ? 'Revoked' : k.activatedAt ? 'Active' : 'Pending'}
-        </span>
-      </td>
-      <td style="padding:10px;font-size:11px;color:#5a5a6e;">${k.machine || '—'}</td>
-      <td style="padding:10px;font-size:11px;color:#5a5a6e;">${k.activatedAt ? k.activatedAt.slice(0,10) : '—'}</td>
+      <td style="padding:10px;font-size:12px;color:#ff3e5e;">${o.orderId}</td>
+      <td style="padding:10px;font-size:12px;"><a href="mailto:${o.email}" style="color:#38b6ff;">${o.email}</a></td>
+      <td style="padding:10px;font-size:11px;color:#00e5a0;">✓ Sent</td>
+      <td style="padding:10px;font-size:11px;color:#5a5a6e;">${o.processedAt?.slice(0,10)}</td>
     </tr>
   `).join('');
 
@@ -319,7 +285,6 @@ app.get('/dashboard', (req, res) => {
       <td style="padding:10px;"><a href="mailto:${c.email}" style="color:#38b6ff;font-size:12px;">${c.email}</a></td>
       <td style="padding:10px;font-size:12px;color:#5a5a6e;">${c.subject}</td>
       <td style="padding:10px;font-size:11px;color:#5a5a6e;">${c.os || '—'}</td>
-      <td style="padding:10px;font-size:11px;color:#5a5a6e;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.message}</td>
       <td style="padding:10px;font-size:11px;color:#5a5a6e;">${c.receivedAt?.slice(0,10)}</td>
     </tr>
   `).join('');
@@ -342,16 +307,9 @@ app.get('/dashboard', (req, res) => {
         .stat-label{font-size:11px;color:#5a5a6e;margin-top:4px;text-transform:uppercase;letter-spacing:0.1em;}
         .section{padding:28px 32px;}
         .section-title{font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#5a5a6e;margin-bottom:14px;}
-        .table-wrap{overflow-x:auto;margin-bottom:28px;}
+        .table-wrap{overflow-x:auto;}
         table{width:100%;border-collapse:collapse;background:#16161a;border:1px solid #252529;border-radius:12px;overflow:hidden;}
         th{padding:12px;text-align:left;font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:#5a5a6e;border-bottom:1px solid #252529;}
-        .gen-form{background:#16161a;border:1px solid #252529;border-radius:12px;padding:20px;
-          display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:20px;}
-        .gen-form input{background:#0a0a0b;border:1px solid #3a3a42;border-radius:8px;
-          color:#e8e8f0;font-size:13px;padding:8px 12px;outline:none;}
-        .gen-form button{background:#ff3e5e;border:none;border-radius:8px;color:#fff;
-          font-weight:700;font-size:13px;padding:9px 20px;cursor:pointer;}
-        .gen-form label{font-size:10px;color:#5a5a6e;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.1em;}
       </style>
     </head>
     <body>
@@ -361,27 +319,17 @@ app.get('/dashboard', (req, res) => {
       </div>
 
       <div class="stats">
-        <div class="stat"><div class="stat-val">${keys.length}</div><div class="stat-label">Total Keys</div></div>
-        <div class="stat"><div class="stat-val green">${activated}</div><div class="stat-label">Activated</div></div>
-        <div class="stat"><div class="stat-val" style="color:#f9ca24;">${pending}</div><div class="stat-label">Pending</div></div>
-        <div class="stat"><div class="stat-val green">$${revenue.toFixed(2)}</div><div class="stat-label">Revenue</div></div>
+        <div class="stat"><div class="stat-val green">${orders.length}</div><div class="stat-label">Total Sales</div></div>
+        <div class="stat"><div class="stat-val green">$${(orders.length * 19.99).toFixed(2)}</div><div class="stat-label">Revenue</div></div>
         <div class="stat"><div class="stat-val">${contacts.length}</div><div class="stat-label">Contacts</div></div>
       </div>
 
       <div class="section">
-        <div class="section-title">Manual Key Generation</div>
-        <form class="gen-form" method="POST" action="/api/keys/manual?pass=${pass}">
-          <div><label>Customer Email</label><input type="email" name="email" placeholder="customer@email.com" style="width:240px;"/></div>
-          <button type="submit">Generate & Email Key</button>
-        </form>
-      </div>
-
-      <div class="section">
-        <div class="section-title">License Keys</div>
+        <div class="section-title">Orders — Pro Download Sent</div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Key</th><th>Email</th><th>Status</th><th>Machine</th><th>Activated</th></tr></thead>
-            <tbody>${keyRows || `<tr><td colspan="5" style="padding:24px;color:#5a5a6e;text-align:center;">No keys yet.</td></tr>`}</tbody>
+            <thead><tr><th>Order ID</th><th>Email</th><th>Status</th><th>Date</th></tr></thead>
+            <tbody>${orderRows || `<tr><td colspan="4" style="padding:24px;color:#5a5a6e;text-align:center;">No orders yet.</td></tr>`}</tbody>
           </table>
         </div>
       </div>
@@ -390,69 +338,14 @@ app.get('/dashboard', (req, res) => {
         <div class="section-title">Contact Messages</div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Subject</th><th>OS</th><th>Message</th><th>Date</th></tr></thead>
-            <tbody>${contactRows || `<tr><td colspan="6" style="padding:24px;color:#5a5a6e;text-align:center;">No messages yet.</td></tr>`}</tbody>
+            <thead><tr><th>Name</th><th>Email</th><th>Subject</th><th>OS</th><th>Date</th></tr></thead>
+            <tbody>${contactRows || `<tr><td colspan="5" style="padding:24px;color:#5a5a6e;text-align:center;">No messages yet.</td></tr>`}</tbody>
           </table>
         </div>
       </div>
     </body>
     </html>
   `);
-});
-
-// ── POST /api/keys/manual — generate key from dashboard ──────────────────────
-app.post('/api/keys/manual', async (req, res) => {
-  const pass  = req.query.pass;
-  const email = req.body.email;
-
-  if (pass !== DASHBOARD_PASS) return res.status(401).send('Unauthorized');
-  if (!email) return res.redirect(`/dashboard?pass=${pass}`);
-
-  const keys = loadKeys();
-  const key  = generateKey();
-  keys.push({
-    key,
-    email,
-    orderId:     'manual-' + Date.now(),
-    createdAt:   new Date().toISOString(),
-    activatedAt: null,
-    machine:     null,
-    revoked:     false,
-    source:      'manual'
-  });
-  saveKeys(keys);
-
-  // Email key to customer
-  try {
-    await sendEmail(
-      email,
-      '🛡 Your Incognito Guard Pro License Key',
-      `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-        <div style="background:#0a0a0b;padding:24px;border-radius:12px 12px 0 0;">
-          <h2 style="color:#ff3e5e;margin:0;">Your Incognito Guard Pro License</h2>
-        </div>
-        <div style="background:#f9f9f9;padding:32px;border-radius:0 0 12px 12px;">
-          <p style="margin-bottom:16px;">Thank you for purchasing Incognito Guard Pro!</p>
-          <p>Your license key:</p>
-          <div style="background:#0a0a0b;color:#ff3e5e;font-family:monospace;font-size:22px;
-            padding:20px;border-radius:8px;margin:16px 0;letter-spacing:0.15em;text-align:center;">
-            ${key}
-          </div>
-          <p style="font-weight:bold;margin-bottom:8px;">How to activate:</p>
-          <ol style="margin:8px 0 16px 20px;line-height:2.2;">
-            <li>Open Incognito Guard and click <strong>⚙ Settings</strong></li>
-            <li>Enter your license key above</li>
-            <li>Click <strong>Activate Pro</strong></li>
-          </ol>
-          <p style="color:#999;font-size:12px;">Need help? Visit incognito-guard.vercel.app/ig-contact.html</p>
-        </div>
-      </div>`
-    );
-  } catch (err) {
-    console.error('Email failed:', err.message);
-  }
-
-  res.redirect(`/dashboard?pass=${pass}`);
 });
 
 app.listen(PORT, () => console.log(`Incognito Guard Server running on port ${PORT}`));

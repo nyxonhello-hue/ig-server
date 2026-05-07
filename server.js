@@ -348,4 +348,14 @@ app.get('/dashboard', (req, res) => {
   `);
 });
 
+
+// ── GET /api/clear-orders — one time use to clear stuck orders ────────────────
+app.get('/api/clear-orders', (req, res) => {
+  const pass = req.query.pass;
+  if (pass !== DASHBOARD_PASS) return res.status(401).json({ error: 'Unauthorized' });
+  fs.writeFileSync(ORDERS_FILE, '[]');
+  console.log('Orders file cleared');
+  res.json({ success: true, message: 'Orders cleared' });
+});
+
 app.listen(PORT, () => console.log(`Incognito Guard Server running on port ${PORT}`));

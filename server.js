@@ -1,5 +1,4 @@
 const express    = require('express');
-const nodemailer = require('nodemailer');
 const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
@@ -8,10 +7,10 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const GMAIL_USER        = process.env.GMAIL_USER        || '';
-const GMAIL_PASS        = process.env.GMAIL_PASS        || '';
-const NOTIFY_EMAIL      = process.env.NOTIFY_EMAIL      || '';
-const DASHBOARD_PASS    = process.env.DASHBOARD_PASS    || 'ig2024';
+const RESEND_API_KEY    = process.env.RESEND_API_KEY    || '';
+const FROM_EMAIL       = process.env.FROM_EMAIL        || 'onboarding@resend.dev';
+const NOTIFY_EMAIL     = process.env.NOTIFY_EMAIL      || '';
+const DASHBOARD_PASS   = process.env.DASHBOARD_PASS    || 'ig2024';
 const LS_WEBHOOK_SECRET = process.env.LS_WEBHOOK_SECRET || '';
 
 // Pro download links (update these when you publish new releases)
@@ -43,16 +42,44 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Mailer ────────────────────────────────────────────────────────────────────
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: GMAIL_USER, pass: GMAIL_PASS }
-});
+// ── Mailer — Resend HTTP API ──────────────────────────────────────────────────
+async function sendEmail(to, subject, html) {
+  const https = require('https');
+  const body  = JSON.stringify({
+    from:    `Incognito Guard <${FROM_EMAIL}>`,
+    to:      [to],
+    subject,
+    html
+  });
 
-function sendEmail(to, subject, html) {
-  return transporter.sendMail({
-    from: `"Incognito Guard" <${GMAIL_USER}>`,
-    to, subject, html
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.resend.com',
+      path:     '/emails',
+      method:   'POST',
+      headers:  {
+        'Authorization': `Bearer ${RESEND_API_KEY}`,
+        'Content-Type':  'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        const result = JSON.parse(data);
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(result);
+        } else {
+          reject(new Error(`Resend error: ${data}`));
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(body);
+    req.end();
   });
 }
 

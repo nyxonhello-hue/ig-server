@@ -1,4 +1,5 @@
 const express    = require('express');
+const nodemailer = require('nodemailer');
 const fs         = require('fs');
 const path       = require('path');
 const crypto     = require('crypto');
@@ -7,12 +8,11 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const RESEND_API_KEY       = process.env.RESEND_API_KEY       || '';
-const FROM_EMAIL          = process.env.FROM_EMAIL           || 'onboarding@resend.dev';
-const RESEND_VERIFIED_EMAIL = process.env.RESEND_VERIFIED_EMAIL || '';
-const NOTIFY_EMAIL        = process.env.NOTIFY_EMAIL         || '';
-const DASHBOARD_PASS      = process.env.DASHBOARD_PASS       || 'ig2024';
-const LS_WEBHOOK_SECRET   = process.env.LS_WEBHOOK_SECRET    || '';
+const GMAIL_USER        = process.env.GMAIL_USER        || '';
+const GMAIL_PASS        = process.env.GMAIL_PASS        || '';
+const NOTIFY_EMAIL      = process.env.NOTIFY_EMAIL      || '';
+const DASHBOARD_PASS    = process.env.DASHBOARD_PASS    || 'ig2024';
+const LS_WEBHOOK_SECRET = process.env.LS_WEBHOOK_SECRET || '';
 
 // Pro download links (update these when you publish new releases)
 const PRO_DOWNLOADS = {
@@ -43,55 +43,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Mailer — Resend (sends to verified email only in test, any email in prod) ──
-async function sendEmail(to, subject, html) {
-  const https = require('https');
+// ── Mailer ────────────────────────────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+  pool: true,
+  maxConnections: 1,
+  socketTimeout: 60000,
+  connectionTimeout: 60000,
+  greetingTimeout: 30000
+});
 
-  // On Resend free tier without domain, we can only send to verified email
-  // So we send to owner who then manually forwards — OR verify a domain
-  const actualTo = RESEND_VERIFIED_EMAIL || to;
-
-  const body = JSON.stringify({
-    from:    `Incognito Guard <${FROM_EMAIL}>`,
-    to:      [actualTo],
-    subject: actualTo !== to ? `[FOR: ${to}] ${subject}` : subject,
-    html:    actualTo !== to
-      ? `<p style="background:#fff3cd;padding:12px;border-radius:6px;font-family:sans-serif;">
-           <strong>⚠️ Forward this to:</strong> ${to}
-         </p>${html}`
-      : html
-  });
-
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'api.resend.com',
-      path:     '/emails',
-      method:   'POST',
-      headers:  {
-        'Authorization': `Bearer ${RESEND_API_KEY}`,
-        'Content-Type':  'application/json',
-        'Content-Length': Buffer.byteLength(body)
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(data);
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            resolve(result);
-          } else {
-            reject(new Error(`Resend error: ${data}`));
-          }
-        } catch(e) { reject(e); }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(body);
-    req.end();
+function sendEmail(to, subject, html) {
+  return transporter.sendMail({
+    from: `"Incognito Guard" <${GMAIL_USER}>`,
+    to, subject, html
   });
 }
 

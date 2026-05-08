@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const GMAIL_USER        = process.env.GMAIL_USER        || '';
 const GMAIL_PASS        = process.env.GMAIL_PASS        || '';
 const NOTIFY_EMAIL      = process.env.NOTIFY_EMAIL      || '';
-const DASHBOARD_PASS    = process.env.DASHBOARD_PASS    || 'ig2024';
+const DASHBOARD_PASS    = process.env.DASHBOARD_PASS    || 'ig2026';
 const LS_WEBHOOK_SECRET = process.env.LS_WEBHOOK_SECRET || '';
 
 // Pro download links (update these when you publish new releases)
